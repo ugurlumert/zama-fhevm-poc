@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>SimpleCounter Demo</title>
+    <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.2/dist/ethers.min.js"></script>
+    <style>
+      :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+      body { max-width: 720px; margin: 40px auto; padding: 0 16px; }
+      h1 { margin: 0 0 8px; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .row { display: flex; gap: 12px; flex-wrap: wrap; margin: 12px 0; }
+      button, input { padding: 10px 14px; border: 1px solid #ddd; border-radius: 10px; }
+      button { cursor: pointer; }
+      #log { margin-top: 12px; padding: 10px; background: #f7f7f7; border-radius: 10px; white-space: pre-wrap; min-height: 90px; }
+      .value { font-size: 28px; font-weight: 600; }
+      label { font-size: 12px; color: #555; display: block; margin-bottom: 4px; }
+      .card { border: 1px solid #eee; border-radius: 14px; padding: 14px; }
+    </style>
+  </head>
+  <body>
+    <h1>SimpleCounter (localhost)</h1>
+
+    <div class="card">
+      <label>Kontrat adresi</label>
+      <div class="row">
+        <input id="addr" class="mono" style="flex:1; min-width: 340px" placeholder="0x..." />
+        <button id="saveAddr">Adresi Kaydet</button>
+      </div>
+      <small>İpucu: Bu sayfayı proje kökünden servis ediyorsan adresi otomatik doldurmak için
+        <code>/deployments/localhost/SimpleCounter.json</code> dosyası okunur.</small>
+    </div>
+
+    <div class="row" style="margin-top: 16px">
+      <button id="connect">🔌 Cüzdanı Bağla</button>
+      <button id="read" disabled>📖 Değeri Oku</button>
+      <button id="inc" disabled>➕ Increment</button>
+      <button id="dec" disabled>➖ Decrement</button>
+    </div>
+
+    <div class="card">
+      <div>Güncel Değer:</div>
+      <div class="value mono" id="val">?</div>
+    </div>
+
+    <div id="log">Hazır.</div>
+
+    <script>
+      // ---- 0) Kontrat adresini bul: deployments JSON'dan dene; olmazsa FALLBACK kullan ----
+      const FALLBACK_ADDRESS = ""; // istersen buraya elle adres yaz
+      const addrInput = document.getElementById("addr");
+      const log = (m) => { const el = document.getElementById("log"); el.textContent += "\\n" + m; };
+      const setVal = (v) => document.getElementById("val").textContent = String(v);
+
+      let CONTRACT_ADDRESS = "";
+      async function resolveAddress() {
+        try {
+          const res = await fetch("/deployments/localhost/SimpleCounter.json");
+          if (res.ok) {
+            const j = await res.json();
+            CONTRACT_ADDRESS = j.address;
+            log("Adres (deployments): " + CONTRACT_ADDRESS);
+          } else { throw new Error("HTTP " + res.status); }
+        } catch {
+          CONTRACT_ADDRESS = FALLBACK_ADDRESS || addrInput.value || "";
+          if (CONTRACT_ADDRESS) log("Adres (fallback): " + CONTRACT_ADDRESS);
+          else log("Adres bulunamadı. Lütfen kutuya yapıştırıp 'Adresi Kaydet' de.");
+        }
+        addrInput.value = CONTRACT_ADDRESS || "";
+      }
+
+      // ---- 1) Ethers ve sözleşme nesneleri ----
+      let provider, signer, contract;
+      const ABI = [
+        { "inputs": [], "name": "increment", "outputs": [], "stateMutability": "nonpayable", "type": "function" },
+        { "inputs": [], "name": "decrement", "outputs": [], "stateMutability": "nonpayable", "type": "function" },
+        { "inputs": [], "name": "get", "outputs": [{ "internalType": "int256", "name": "", "type": "int256" }], "stateMutability": "view", "type": "function" }
+      ];
+
+      async function ensureContract(boundSigner) {
+        if (!CONTRACT_ADDRESS) { alert("Kontrat adresi boş."); return; }
+        contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, boundSigner);
+      }
+
+      // ---- 2) Bağlan ----
+      document.getElementById("connect").onclick = async () => {
+        if (!window.ethereum) { alert("MetaMask gerekli"); return; }
+        await window.ethereum.request({ method: "eth_requestAccounts" });
+        provider = new ethers.BrowserProvider(window.ethereum);
+        const network = await provider.getNetwork();
+
+        // Hardhat: 31337
+        if (Number(network.chainId) !== 31337) {
+          alert("Lütfen MetaMask'te Hardhat (chainId 31337) ağına geç.");
+          return;
+        }
+
+        signer = await provider.getSigner();
+        await ensureContract(signer);
+
+        document.getElementById("inc").disabled = false;
+        document.getElementById("dec").disabled = false;
+        document.getElementById("read").disabled = false;
+
+        log("Bağlandı: " + await signer.getAddress());
+      };
+
+      // ---- 3) Oku / Yaz işlemleri ----
+      document.getElementById("read").onclick = async () => {
+        try {
+          const v = await contract.get();
+          setVal(v.toString());
+          log("get() → " + v.toString());
+        } catch (e) {
+          log("Hata [get]: " + (e?.message || e));
+        }
+      };
+
+      document.getElementById("inc").onclick = async () => {
+        try {
+          log("increment gönderiliyor...");
+          const tx = await contract.increment();
+          log("tx: " + tx.hash);
+          const r = await tx.wait();
+          log("✅ increment onaylandı, block " + r.blockNumber);
+          document.getElementById("read").click();
+        } catch (e) {
+          log("Hata [increment]: " + (e?.message || e));
+        }
+      };
+
+      document.getElementById("dec").onclick = async () => {
+        try {
+          log("decrement gönderiliyor...");
+          const tx = await contract.decrement();
+          log("tx: " + tx.hash);
+          const r = await tx.wait();
+          log("✅ decrement onaylandı, block " + r.blockNumber);
+          document.getElementById("read").click();
+        } catch (e) {
+          log("Hata [decrement]: " + (e?.message || e));
+        }
+      };
+
+      // ---- 4) Adresi elle kaydet ----
+      document.getElementById("saveAddr").onclick = async () => {
+        CONTRACT_ADDRESS = addrInput.value.trim();
+        await ensureContract(signer || provider);
+        log("Adres güncellendi: " + CONTRACT_ADDRESS);
+      };
+
+      // ---- Başlangıçta otomatik adres çöz ----
+      resolveAddress().then(() => setVal("?"));
+    </script>
+  </body>
+</html>
